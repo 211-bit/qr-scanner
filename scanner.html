@@ -4,391 +4,224 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>QR Code 掃描器</title>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* { margin:0; padding:0; box-sizing:border-box; }
 body {
-  background: #000;
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  overflow: hidden;
-  font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif;
-  -webkit-tap-highlight-color: transparent;
+  background:#000; display:flex; flex-direction:column;
+  height:100dvh; overflow:hidden;
+  font-family:'PingFang TC','Microsoft JhengHei',sans-serif;
 }
-
-/* 影像區 */
-#video-wrap {
-  flex: 1;
-  position: relative;
-  overflow: hidden;
-}
-#video {
-  width: 100%; height: 100%;
-  object-fit: cover;
-  display: block;
-}
+#video-wrap { flex:1; position:relative; overflow:hidden; }
+#video { width:100%; height:100%; object-fit:cover; display:block; }
 
 /* 掃描框 */
-#frame-wrap {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-#frame {
-  width: 240px; height: 240px;
-  position: relative;
-}
-/* 暗色遮罩 */
-#frame::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.52);
-  /* 挖空中間 */
-  mask:
-    linear-gradient(#000 0 0) top / 100% calc(50% - 120px),
-    linear-gradient(#000 0 0) bottom / 100% calc(50% - 120px),
-    linear-gradient(#000 0 0) left / calc(50% - 120px) 240px,
-    linear-gradient(#000 0 0) right / calc(50% - 120px) 240px;
-  mask-repeat: no-repeat;
-  -webkit-mask:
-    linear-gradient(#000 0 0) top / 100% calc(50% - 120px),
-    linear-gradient(#000 0 0) bottom / 100% calc(50% - 120px),
-    linear-gradient(#000 0 0) left / calc(50% - 120px) 240px,
-    linear-gradient(#000 0 0) right / calc(50% - 120px) 240px;
-  -webkit-mask-repeat: no-repeat;
-}
-/* 白色框線 */
-#frame-border {
-  position: absolute;
-  inset: 0;
-  border: 2.5px solid rgba(255,255,255,0.85);
-  border-radius: 16px;
-}
-/* 四角藍色標記 */
-.corner {
-  position: absolute;
-  width: 26px; height: 26px;
-  border-color: #4361ee;
-  border-style: solid;
-}
-.corner.tl { top: -3px; left: -3px; border-width: 4px 0 0 4px; border-radius: 14px 0 0 0; }
-.corner.tr { top: -3px; right: -3px; border-width: 4px 4px 0 0; border-radius: 0 14px 0 0; }
-.corner.bl { bottom: -3px; left: -3px; border-width: 0 0 4px 4px; border-radius: 0 0 0 14px; }
-.corner.br { bottom: -3px; right: -3px; border-width: 0 4px 4px 0; border-radius: 0 0 14px 0; }
-/* 掃描線 */
-#scan-line {
-  position: absolute;
-  left: 6px; right: 6px;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #4361ee 30%, #7209b7 70%, transparent);
-  border-radius: 2px;
-  animation: scanAnim 1.8s ease-in-out infinite;
-}
-@keyframes scanAnim {
-  0%   { top: 6px; opacity: 1; }
-  48%  { top: calc(100% - 8px); opacity: 1; }
-  50%  { opacity: 0; }
-  52%  { top: 6px; opacity: 0; }
-  54%  { opacity: 1; }
-  100% { top: calc(100% - 8px); opacity: 1; }
-}
+#overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+#frame { width:240px; height:240px; position:relative; box-shadow:0 0 0 9999px rgba(0,0,0,0.52); border-radius:16px; }
+#fb { position:absolute; inset:0; border:2.5px solid rgba(255,255,255,0.85); border-radius:16px; }
+.c { position:absolute; width:26px; height:26px; border-color:#4361ee; border-style:solid; }
+.tl{top:-3px;left:-3px;border-width:4px 0 0 4px;border-radius:14px 0 0 0}
+.tr{top:-3px;right:-3px;border-width:4px 4px 0 0;border-radius:0 14px 0 0}
+.bl{bottom:-3px;left:-3px;border-width:0 0 4px 4px;border-radius:0 0 0 14px}
+.br{bottom:-3px;right:-3px;border-width:0 4px 4px 0;border-radius:0 0 14px 0}
+#sl { position:absolute; left:6px; right:6px; height:2px; background:linear-gradient(90deg,transparent,#4361ee,#7209b7,transparent); border-radius:2px; animation:sa 1.8s ease-in-out infinite; }
+@keyframes sa { 0%{top:6px} 50%{top:calc(100% - 8px)} 100%{top:6px} }
+
+/* 頂部 */
+#topbar { position:absolute; top:0; left:0; right:0; background:linear-gradient(180deg,rgba(0,0,0,0.75),transparent); padding:14px 16px 28px; display:flex; align-items:center; justify-content:space-between; }
+#st { color:rgba(255,255,255,0.9); font-size:13px; font-weight:500; }
+#sc { display:none; background:rgba(255,255,255,0.18); color:white; font-size:12px; font-weight:700; padding:4px 12px; border-radius:20px; }
 
 /* 引導文字 */
-#guide {
-  position: absolute;
-  bottom: 110px;
-  left: 0; width: 100%;
-  text-align: center;
-  color: white;
-  font-size: 14px;
-  font-weight: 500;
-  text-shadow: 0 1px 4px rgba(0,0,0,0.8);
-  letter-spacing: 0.3px;
-  pointer-events: none;
-}
-
-/* 狀態列（頂部） */
-#status-bar {
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  background: linear-gradient(180deg, rgba(0,0,0,0.7), transparent);
-  padding: 14px 16px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  pointer-events: none;
-}
-#status-text {
-  color: rgba(255,255,255,0.85);
-  font-size: 13px;
-  font-weight: 500;
-}
-#scan-count {
-  background: rgba(255,255,255,0.18);
-  color: white;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 4px 12px;
-  border-radius: 20px;
-}
+#guide { position:absolute; bottom:110px; left:0; width:100%; text-align:center; color:white; font-size:14px; font-weight:500; text-shadow:0 1px 4px rgba(0,0,0,0.8); pointer-events:none; }
 
 /* 成功提示 */
-#success-overlay {
-  display: none;
-  position: absolute;
-  inset: 0;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-}
-#success-box {
-  background: rgba(5,150,105,0.96);
-  color: white;
-  padding: 28px 36px;
-  border-radius: 20px;
-  text-align: center;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
-  max-width: 280px;
-}
-#success-icon { font-size: 52px; margin-bottom: 10px; }
-#success-title { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
-#success-text { font-size: 13px; opacity: 0.9; word-break: break-all; line-height: 1.5; }
+#sov { display:none; position:absolute; inset:0; align-items:center; justify-content:center; z-index:50; }
+#sbox { background:rgba(5,150,105,0.96); color:white; padding:28px 36px; border-radius:20px; text-align:center; box-shadow:0 12px 40px rgba(0,0,0,0.5); max-width:280px; }
+#sicon { font-size:52px; margin-bottom:10px; }
+#stitle { font-size:20px; font-weight:800; margin-bottom:8px; }
+#stext { font-size:13px; opacity:.9; word-break:break-all; line-height:1.5; }
 
-/* 底部操作區 */
-#bottom-bar {
-  padding: 14px 20px 28px;
-  background: rgba(0,0,0,0.88);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-}
-#close-btn {
-  flex: 1;
-  max-width: 200px;
-  padding: 14px 0;
-  background: linear-gradient(135deg, #059669, #10b981);
-  color: white;
-  border: none;
-  border-radius: 30px;
-  font-size: 15px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(5,150,105,0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
+/* 底部 */
+#bottom { padding:14px 20px 28px; background:rgba(0,0,0,0.88); display:flex; gap:12px; align-items:center; justify-content:center; }
+#cbtn { flex:1; max-width:200px; padding:14px; background:linear-gradient(135deg,#059669,#10b981); color:white; border:none; border-radius:30px; font-size:15px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(5,150,105,0.4); }
 
-/* 錯誤提示 */
-#err-msg {
-  display: none;
-  position: absolute;
-  top: 70px;
-  left: 16px; right: 16px;
-  background: rgba(239,68,68,0.95);
-  color: white;
-  padding: 14px 18px;
-  border-radius: 12px;
-  font-size: 13px;
-  line-height: 1.6;
-  text-align: center;
-  z-index: 60;
-}
+/* 通知 */
+#notice { display:none; position:absolute; top:64px; left:12px; right:12px; padding:14px 16px; border-radius:12px; font-size:13px; line-height:1.6; text-align:center; z-index:60; color:white; }
+.err  { background:rgba(239,68,68,0.95); }
+.warn { background:rgba(234,179,8,0.95); color:#1c1917; }
+.info { background:rgba(67,97,238,0.92); }
 </style>
 </head>
 <body>
 
 <div id="video-wrap">
   <video id="video" muted autoplay playsinline></video>
-
-  <!-- 掃描框 -->
-  <div id="frame-wrap">
+  <div id="overlay">
     <div id="frame">
-      <div id="frame-border"></div>
-      <div class="corner tl"></div>
-      <div class="corner tr"></div>
-      <div class="corner bl"></div>
-      <div class="corner br"></div>
-      <div id="scan-line"></div>
+      <div id="fb"></div>
+      <div class="c tl"></div><div class="c tr"></div>
+      <div class="c bl"></div><div class="c br"></div>
+      <div id="sl"></div>
     </div>
   </div>
-
-  <!-- 頂部狀態 -->
-  <div id="status-bar">
-    <div id="status-text">⏳ 相機啟動中...</div>
-    <div id="scan-count" style="display:none;"></div>
+  <div id="topbar">
+    <div id="st">⏳ 載入中...</div>
+    <div id="sc"></div>
   </div>
-
-  <!-- 引導文字 -->
   <div id="guide">將 QR Code 對準框內即可自動辨識</div>
-
-  <!-- 成功提示 -->
-  <div id="success-overlay">
-    <div id="success-box">
-      <div id="success-icon">✅</div>
-      <div id="success-title">掃描成功！</div>
-      <div id="success-text"></div>
+  <div id="sov">
+    <div id="sbox">
+      <div id="sicon">✅</div>
+      <div id="stitle">掃描成功！</div>
+      <div id="stext"></div>
     </div>
   </div>
-
-  <!-- 錯誤提示 -->
-  <div id="err-msg"></div>
+  <div id="notice"></div>
 </div>
 
-<!-- 底部 -->
-<div id="bottom-bar">
-  <button id="close-btn" onclick="finishScan()">
-    ✓ 完成掃描
-  </button>
+<div id="bottom">
+  <button id="cbtn" onclick="finish()">✓ 完成 · 回上一頁</button>
 </div>
-
-<canvas id="canvas" style="display:none;"></canvas>
+<canvas id="cv" style="display:none;"></canvas>
 
 <script>
-// ── 從 URL 參數取得呼叫方資訊 ──
-var params  = new URLSearchParams(location.search);
-var origin  = params.get('origin') || '*';   // 允許的 postMessage 目標
-var maxRows = parseInt(params.get('max') || '10');
-var scanned = [];   // 已掃結果陣列
+var params     = new URLSearchParams(location.search);
+var maxRows    = parseInt(params.get('max') || '10');
+var returnUrl  = params.get('returnUrl') || '';
+
+// 從 localStorage 讀取起始列號
+var stateRaw  = null;
+try { stateRaw = JSON.parse(localStorage.getItem('wh_scan_state')); } catch(e){}
+var startRow  = (stateRaw && stateRaw.startRow != null) ? stateRaw.startRow : 0;
+
+var st    = document.getElementById('st');
+var sc    = document.getElementById('sc');
+var sov   = document.getElementById('sov');
+var stxt  = document.getElementById('stext');
+var ntc   = document.getElementById('notice');
+var video = document.getElementById('video');
+var cv    = document.getElementById('cv');
+var ctx   = cv.getContext('2d');
+
+var scanned = [];  // 本次掃到的結果
 var lock    = false;
+var raf     = null;
 
-// ── UI 元件 ──
-var video      = document.getElementById('video');
-var canvas     = document.getElementById('canvas');
-var ctx        = canvas.getContext('2d');
-var statusText = document.getElementById('status-text');
-var scanCount  = document.getElementById('scan-count');
-var successOv  = document.getElementById('success-overlay');
-var successTxt = document.getElementById('success-text');
-var errMsg     = document.getElementById('err-msg');
+function note(msg, cls) { ntc.textContent=msg; ntc.className=cls; ntc.style.display='block'; }
 
-function updateCount() {
-  if (scanned.length > 0) {
-    scanCount.style.display = 'block';
-    scanCount.textContent   = '已掃 ' + scanned.length + ' / ' + maxRows;
+// 動態載入 jsQR
+function loadJsQR(cb) {
+  if (typeof jsQR === 'function') { cb(); return; }
+  st.textContent = '⏳ 載入解碼函式庫...';
+  function load(src, ok, fail) {
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = function(){ typeof jsQR==='function'?ok():fail(); };
+    s.onerror = fail;
+    document.head.appendChild(s);
   }
-}
-
-// ── 啟動相機 ──
-(async function start() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showErr('此瀏覽器不支援相機，請使用 Chrome 或 Safari');
-    return;
-  }
-  try {
-    var stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: 'environment' },
-        width:  { ideal: 1280 },
-        height: { ideal: 720 }
-      }
+  load('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', cb, function(){
+    note('jsDelivr 失敗，切換備用...','warn');
+    load('https://unpkg.com/jsqr@1.4.0/dist/jsQR.js', function(){ ntc.style.display='none'; cb(); }, function(){
+      note('❌ 函式庫載入失敗，請確認網路後重新整理','err');
     });
-    video.srcObject = stream;
-    await video.play();
-    statusText.textContent = '📷 對準 QR Code 即可自動辨識';
-    scanLoop();
-  } catch(e) {
-    var msg;
-    if (e.name === 'NotAllowedError') {
-      msg = '❌ 相機權限被拒絕\n\n請點網址列左側的 🔒 → 網站設定 → 相機 → 允許，再重新整理';
-    } else if (e.name === 'NotFoundError') {
-      msg = '❌ 找不到相機，請確認裝置有相機且未被佔用';
-    } else if (e.name === 'NotReadableError') {
-      msg = '❌ 相機被其他 App 佔用，請關閉後再試';
-    } else {
-      msg = '❌ ' + (e.message || e.name);
-    }
-    showErr(msg);
-  }
-})();
-
-// ── jsQR 即掃即讀迴圈 ──
-function scanLoop() {
-  requestAnimationFrame(function tick() {
-    if (lock) { requestAnimationFrame(tick); return; }
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      var code    = jsQR(imgData.data, imgData.width, imgData.height, {
-        inversionAttempts: 'dontInvert'
-      });
-      if (code) {
-        onScanned(code.data);
-        return; // 等解鎖後才繼續
-      }
-    }
-    requestAnimationFrame(tick);
   });
 }
 
-// ── 掃到結果 ──
-function onScanned(text) {
-  lock = true;
+// 啟動相機
+async function startCam() {
+  try {
+    var stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720} }
+    });
+    video.srcObject = stream;
+    await video.play();
+    st.textContent = '📷 對準 QR Code 即可自動辨識';
+    scan();
+  } catch(e) {
+    var msgs = {
+      NotAllowedError:  '❌ 請允許相機權限後重新整理',
+      NotFoundError:    '❌ 找不到相機',
+      NotReadableError: '❌ 相機被其他 App 佔用'
+    };
+    note(msgs[e.name]||('❌ '+e.message),'err');
+    st.textContent = '❌ 相機啟動失敗';
+  }
+}
 
-  // 避免重複掃同一碼
-  if (scanned.length > 0 && scanned[scanned.length - 1] === text) {
-    lock = false;
-    scanLoop();
-    return;
+// RAF 掃描迴圈
+function scan() {
+  function tick() {
+    if (lock) { raf=requestAnimationFrame(tick); return; }
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      cv.width=video.videoWidth||640; cv.height=video.videoHeight||480;
+      if (cv.width && cv.height) {
+        ctx.drawImage(video,0,0,cv.width,cv.height);
+        try {
+          var code = jsQR(ctx.getImageData(0,0,cv.width,cv.height).data, cv.width, cv.height, {inversionAttempts:'attemptBoth'});
+          if (code) { onScan(code.data); return; }
+        } catch(e){}
+      }
+    }
+    raf=requestAnimationFrame(tick);
+  }
+  raf=requestAnimationFrame(tick);
+}
+
+function onScan(text) {
+  lock = true;
+  if (raf) { cancelAnimationFrame(raf); raf=null; }
+
+  // 避免連掃同一碼
+  if (scanned.length && scanned[scanned.length-1]===text) {
+    lock=false; scan(); return;
   }
 
   scanned.push(text);
-  updateCount();
+  sc.style.display='block';
+  sc.textContent='已掃 '+scanned.length+' / '+maxRows;
+  stxt.textContent = '第 '+(startRow+scanned.length)+' 列：'+text;
+  sov.style.display='flex';
+  st.textContent='✅ 第 '+scanned.length+' 筆完成';
 
-  // 顯示成功提示
-  successTxt.textContent    = text;
-  successOv.style.display   = 'flex';
-  statusText.textContent    = '✅ 第 ' + scanned.length + ' 筆完成';
-
-  // 傳送結果給主視窗
-  if (window.opener) {
-    window.opener.postMessage({
-      type:  'QR_SCAN_RESULT',
-      text:  text,
-      index: scanned.length - 1
-    }, origin === '*' ? '*' : origin);
-  }
-
-  setTimeout(function() {
-    successOv.style.display = 'none';
+  setTimeout(function(){
+    sov.style.display='none';
     if (scanned.length >= maxRows) {
-      finishScan();
+      finish();
     } else {
-      statusText.textContent = '📷 繼續對準下一個 QR Code';
-      lock = false;
-      scanLoop();
+      st.textContent='📷 繼續對準下一個 QR Code';
+      lock=false; scan();
     }
   }, 1500);
 }
 
-// ── 完成掃描，關閉視窗 ──
-function finishScan() {
-  // 停止所有 stream
-  if (video.srcObject) {
-    video.srcObject.getTracks().forEach(function(t) { t.stop(); });
+// 完成：存結果 → 跳回 GAS
+function finish() {
+  if (raf) cancelAnimationFrame(raf);
+  if (video.srcObject) video.srcObject.getTracks().forEach(function(t){t.stop();});
+
+  // 把結果存到 localStorage
+  try {
+    localStorage.setItem('wh_scan_results', JSON.stringify({
+      startRow: startRow,
+      results:  scanned,
+      ts:       Date.now()
+    }));
+  } catch(e) {}
+
+  // 跳回 GAS 頁面
+  if (returnUrl) {
+    location.href = returnUrl;
+  } else {
+    // 沒有 returnUrl 就用上一頁
+    if (history.length > 1) { history.back(); }
+    else { window.close(); }
   }
-  // 通知主視窗掃描結束
-  if (window.opener) {
-    window.opener.postMessage({ type: 'QR_SCAN_DONE', total: scanned.length }, origin === '*' ? '*' : origin);
-  }
-  window.close();
 }
 
-function showErr(msg) {
-  errMsg.textContent    = msg;
-  errMsg.style.display  = 'block';
-  statusText.textContent = '❌ 啟動失敗';
-}
+// 入口
+loadJsQR(function(){ st.textContent='⏳ 相機啟動中...'; startCam(); });
 </script>
 </body>
 </html>
