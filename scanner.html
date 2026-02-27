@@ -45,13 +45,12 @@ body { background:#000; display:flex; flex-direction:column; height:100dvh; over
 
 <script>
 // ── URL 參數 ──
-var params      = new URLSearchParams(location.search);
-var maxRows     = parseInt(params.get('max') || '10');
-var returnUrl   = params.get('returnUrl') || '';
-var originUrl   = params.get('origin') || '*';
-var isIframeMode = params.get('mode') === 'iframe'; // 是否在 iframe 內執行
+var params    = new URLSearchParams(location.search);
+var maxRows   = parseInt(params.get('max') || '10');
+var returnUrl = params.get('returnUrl') || '';
+var originUrl = params.get('origin') || '*';  // 相容舊版 postMessage
 
-// 從 localStorage 讀起始列（非 iframe 模式才需要）
+// 從 localStorage 讀起始列
 var stateRaw = null;
 try { stateRaw = JSON.parse(localStorage.getItem('wh_scan_state')); } catch(e){}
 var startRow = (stateRaw && stateRaw.startRow != null) ? stateRaw.startRow : 0;
@@ -158,11 +157,9 @@ async function startScanner() {
         sov.style.display = 'flex';
         st.textContent = '✅ 第 ' + scanned.length + ' 筆完成';
 
-        // 傳回結果：iframe 模式傳給 parent，popup 模式傳給 opener
+        // 同步傳給 GAS（如果有 opener）
         try {
-          if (isIframeMode) {
-            window.parent.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, originUrl);
-          } else if (window.opener) {
+          if (window.opener) {
             window.opener.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, '*');
           }
         } catch(e) {}
@@ -207,15 +204,7 @@ function finish() {
     videoEl.srcObject.getTracks().forEach(function(t){ t.stop(); });
   }
 
-  // iframe 模式：用 postMessage 通知父頁面完成
-  if (isIframeMode) {
-    try {
-      window.parent.postMessage({ type: 'QR_SCAN_DONE', total: scanned.length }, originUrl);
-    } catch(e) {}
-    return; // iframe 模式不跳轉，等父頁面把 src 設為 about:blank
-  }
-
-  // 非 iframe 模式（舊版相容）：存 localStorage 再跳轉
+  // 存結果到 localStorage（原頁面輪詢讀取）
   try {
     localStorage.setItem('wh_scan_results', JSON.stringify({
       startRow: startRow,
@@ -224,16 +213,31 @@ function finish() {
     }));
   } catch(e) {}
 
-  if (returnUrl) {
-    location.href = returnUrl;
-  } else if (window.opener) {
-    try { window.opener.postMessage({ type:'QR_SCAN_DONE', total:scanned.length }, '*'); } catch(e){}
+  // 通知 opener（postMessage 傳回結果，最快速）
+  try {
+    if (window.opener) {
+      window.opener.postMessage({
+        type:     'QR_SCAN_DONE',
+        results:  scanned.slice(),
+        startRow: startRow,
+        total:    scanned.length
+      }, '*');
+    }
+  } catch(e) {}
+
+  // ✅ 關鍵：直接關閉這個分頁，不跳轉
+  // 用 setTimeout 讓 postMessage / localStorage 先寫完
+  setTimeout(function() {
     window.close();
-  } else if (history.length > 1) {
-    history.back();
-  } else {
-    window.close();
-  }
+    // 如果 window.close() 被瀏覽器擋（非 opener 開的視窗），顯示提示
+    setTimeout(function() {
+      if (!window.closed) {
+        document.getElementById('cbtn').textContent = '✅ 掃描完成，請手動關閉此頁';
+        document.getElementById('cbtn').style.background = '#64748b';
+        document.getElementById('cbtn').onclick = function(){ window.close(); };
+      }
+    }, 500);
+  }, 150);
 }
 
 // ── 入口 ──
