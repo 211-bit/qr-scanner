@@ -23,8 +23,7 @@ body {
 .tr{top:-3px;right:-3px;border-width:4px 4px 0 0;border-radius:0 14px 0 0}
 .bl{bottom:-3px;left:-3px;border-width:0 0 4px 4px;border-radius:0 0 0 14px}
 .br{bottom:-3px;right:-3px;border-width:0 4px 4px 0;border-radius:0 0 14px 0}
-#sl { position:absolute; left:6px; right:6px; height:2px; background:linear-gradient(90deg,transparent,#4361ee,#7209b7,transparent); border-radius:2px; animation:sa 1.8s ease-in-out infinite; }
-@keyframes sa { 0%{top:6px} 50%{top:calc(100% - 8px)} 100%{top:6px} }
+
 
 /* 頂部 */
 #topbar { position:absolute; top:0; left:0; right:0; background:linear-gradient(180deg,rgba(0,0,0,0.75),transparent); padding:14px 16px 28px; display:flex; align-items:center; justify-content:space-between; }
@@ -61,8 +60,7 @@ body {
       <div id="fb"></div>
       <div class="c tl"></div><div class="c tr"></div>
       <div class="c bl"></div><div class="c br"></div>
-      <div id="sl"></div>
-    </div>
+      </div>
   </div>
   <div id="topbar">
     <div id="st">⏳ 載入中...</div>
@@ -85,10 +83,14 @@ body {
 <canvas id="cv" style="display:none;"></canvas>
 
 <script>
-var params    = new URLSearchParams(location.search);
-var maxRows   = parseInt(params.get('max') || '10');
-var returnUrl = params.get('returnUrl') || '';
-var startRow  = parseInt(params.get('startRow') || '0');
+var params     = new URLSearchParams(location.search);
+var maxRows    = parseInt(params.get('max') || '10');
+var returnUrl  = params.get('returnUrl') || '';
+
+// 從 localStorage 讀取起始列號
+var stateRaw  = null;
+try { stateRaw = JSON.parse(localStorage.getItem('wh_scan_state')); } catch(e){}
+var startRow  = (stateRaw && stateRaw.startRow != null) ? stateRaw.startRow : 0;
 
 var st    = document.getElementById('st');
 var sc    = document.getElementById('sc');
@@ -99,29 +101,28 @@ var video = document.getElementById('video');
 var cv    = document.getElementById('cv');
 var ctx   = cv.getContext('2d');
 
-var scanned = [];
+var scanned = [];  // 本次掃到的結果
 var lock    = false;
 var raf     = null;
 
 function note(msg, cls) { ntc.textContent=msg; ntc.className=cls; ntc.style.display='block'; }
 
-// 動態載入 jsQR（主 + 備用 CDN）
+// 動態載入 jsQR
 function loadJsQR(cb) {
   if (typeof jsQR === 'function') { cb(); return; }
   st.textContent = '⏳ 載入解碼函式庫...';
   function load(src, ok, fail) {
     var s = document.createElement('script');
     s.src = src;
-    s.onload = function(){ typeof jsQR === 'function' ? ok() : fail(); };
+    s.onload = function(){ typeof jsQR==='function'?ok():fail(); };
     s.onerror = fail;
     document.head.appendChild(s);
   }
   load('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', cb, function(){
-    note('切換備用載入...','warn');
-    load('https://unpkg.com/jsqr@1.4.0/dist/jsQR.js',
-      function(){ ntc.style.display='none'; cb(); },
-      function(){ note('❌ 函式庫載入失敗，請確認網路後重新整理','err'); }
-    );
+    note('jsDelivr 失敗，切換備用...','warn');
+    load('https://unpkg.com/jsqr@1.4.0/dist/jsQR.js', function(){ ntc.style.display='none'; cb(); }, function(){
+      note('❌ 函式庫載入失敗，請確認網路後重新整理','err');
+    });
   });
 }
 
@@ -142,90 +143,83 @@ async function startCam() {
       NotFoundError:    '❌ 找不到相機',
       NotReadableError: '❌ 相機被其他 App 佔用'
     };
-    note(msgs[e.name] || ('❌ ' + e.message), 'err');
+    note(msgs[e.name]||('❌ '+e.message),'err');
     st.textContent = '❌ 相機啟動失敗';
   }
 }
 
-// RAF 掃描迴圈 - 每幀抓圖交給 jsQR 解碼
+// RAF 掃描迴圈
 function scan() {
   function tick() {
-    if (lock) { raf = requestAnimationFrame(tick); return; }
+    if (lock) { raf=requestAnimationFrame(tick); return; }
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      cv.width  = video.videoWidth  || 640;
-      cv.height = video.videoHeight || 480;
+      cv.width=video.videoWidth||640; cv.height=video.videoHeight||480;
       if (cv.width && cv.height) {
-        ctx.drawImage(video, 0, 0, cv.width, cv.height);
+        ctx.drawImage(video,0,0,cv.width,cv.height);
         try {
-          var code = jsQR(
-            ctx.getImageData(0, 0, cv.width, cv.height).data,
-            cv.width, cv.height,
-            { inversionAttempts: 'attemptBoth' }
-          );
+          var code = jsQR(ctx.getImageData(0,0,cv.width,cv.height).data, cv.width, cv.height, {inversionAttempts:'attemptBoth'});
           if (code) { onScan(code.data); return; }
-        } catch(e) {}
+        } catch(e){}
       }
     }
-    raf = requestAnimationFrame(tick);
+    raf=requestAnimationFrame(tick);
   }
-  raf = requestAnimationFrame(tick);
+  raf=requestAnimationFrame(tick);
 }
 
 function onScan(text) {
   lock = true;
-  if (raf) { cancelAnimationFrame(raf); raf = null; }
+  if (raf) { cancelAnimationFrame(raf); raf=null; }
 
   // 避免連掃同一碼
-  if (scanned.length && scanned[scanned.length - 1] === text) {
-    lock = false; scan(); return;
+  if (scanned.length && scanned[scanned.length-1]===text) {
+    lock=false; scan(); return;
   }
 
   scanned.push(text);
-  sc.style.display = 'block';
-  sc.textContent   = '已掃 ' + scanned.length + ' / ' + maxRows;
-  stxt.textContent = '第 ' + (startRow + scanned.length) + ' 列：' + text;
-  sov.style.display = 'flex';
-  st.textContent   = '✅ 第 ' + scanned.length + ' 筆完成';
+  sc.style.display='block';
+  sc.textContent='已掃 '+scanned.length+' / '+maxRows;
+  stxt.textContent = '第 '+(startRow+scanned.length)+' 列：'+text;
+  sov.style.display='flex';
+  st.textContent='✅ 第 '+scanned.length+' 筆完成';
 
   setTimeout(function(){
-    sov.style.display = 'none';
+    sov.style.display='none';
     if (scanned.length >= maxRows) {
       finish();
     } else {
-      st.textContent = '📷 繼續對準下一個 QR Code';
-      lock = false;
-      scan();
+      st.textContent='📷 繼續對準下一個 QR Code';
+      lock=false; scan();
     }
   }, 1500);
 }
 
-// 完成：結果用 URL 參數傳回 GAS（解決跨域 localStorage 問題）
+// 完成：存結果 → 跳回 GAS
 function finish() {
   if (raf) cancelAnimationFrame(raf);
-  if (video.srcObject) video.srcObject.getTracks().forEach(function(t){ t.stop(); });
+  if (video.srcObject) video.srcObject.getTracks().forEach(function(t){t.stop();});
 
-  if (!returnUrl) {
+  // 把結果存到 localStorage
+  try {
+    localStorage.setItem('wh_scan_results', JSON.stringify({
+      startRow: startRow,
+      results:  scanned,
+      ts:       Date.now()
+    }));
+  } catch(e) {}
+
+  // 跳回 GAS 頁面
+  if (returnUrl) {
+    location.href = returnUrl;
+  } else {
+    // 沒有 returnUrl 就用上一頁
     if (history.length > 1) { history.back(); }
     else { window.close(); }
-    return;
   }
-
-  // 把掃描結果用 URL 參數帶回去
-  // 格式：returnUrl + &scanResults=item1|item2|item3&startRow=0
-  var encoded = scanned.map(function(s){ return encodeURIComponent(s); }).join('|');
-  var url = returnUrl
-    + (returnUrl.indexOf('?') >= 0 ? '&' : '?')
-    + 'scanResults=' + encoded
-    + '&startRow=' + startRow;
-
-  location.href = url;
 }
 
 // 入口
-loadJsQR(function(){
-  st.textContent = '⏳ 相機啟動中...';
-  startCam();
-});
+loadJsQR(function(){ st.textContent='⏳ 相機啟動中...'; startCam(); });
 </script>
 </body>
 </html>
