@@ -30,32 +30,6 @@ body { background:#000; display:flex; flex-direction:column; height:100dvh; over
 #cbtn { flex:1; max-width:220px; padding:15px; background:linear-gradient(135deg,#059669,#10b981); color:white; border:none; border-radius:30px; font-size:16px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(5,150,105,0.4); }
 #notice { display:none; position:absolute; top:70px; left:12px; right:12px; padding:14px 16px; border-radius:12px; font-size:13px; line-height:1.6; text-align:center; z-index:60; color:white; }
 .err{background:rgba(239,68,68,0.95)} .warn{background:rgba(234,179,8,0.95);color:#1c1917}
-
-/* 返回中遮罩 */
-#returning-overlay {
-  display:none;
-  position:fixed;
-  inset:0;
-  background:linear-gradient(135deg,#4361ee 0%,#7209b7 100%);
-  z-index:9999;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-  color:white;
-  text-align:center;
-  gap:16px;
-}
-#returning-overlay.show { display:flex; }
-.ret-spinner {
-  width:52px; height:52px;
-  border:5px solid rgba(255,255,255,0.3);
-  border-top-color:white;
-  border-radius:50%;
-  animation:spin 0.9s linear infinite;
-}
-.ret-title { font-size:20px; font-weight:800; }
-.ret-sub   { font-size:14px; opacity:0.85; }
-@keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -69,21 +43,15 @@ body { background:#000; display:flex; flex-direction:column; height:100dvh; over
 </div>
 <div id="bottom"><button id="cbtn" onclick="finish()">✓ 完成掃描</button></div>
 
-<!-- 返回中遮罩（避免用戶看到空白畫面） -->
-<div id="returning-overlay">
-  <div class="ret-spinner"></div>
-  <div class="ret-title">掃描完成 ✅</div>
-  <div class="ret-sub">結果傳送中，正在返回系統...</div>
-</div>
-
 <script>
 // ── URL 參數 ──
-var params    = new URLSearchParams(location.search);
-var maxRows   = parseInt(params.get('max') || '10');
-var returnUrl = params.get('returnUrl') || '';
-var originUrl = params.get('origin') || '*';
+var params      = new URLSearchParams(location.search);
+var maxRows     = parseInt(params.get('max') || '10');
+var returnUrl   = params.get('returnUrl') || '';
+var originUrl   = params.get('origin') || '*';
+var isIframeMode = params.get('mode') === 'iframe'; // 是否在 iframe 內執行
 
-// 從 localStorage 讀起始列
+// 從 localStorage 讀起始列（非 iframe 模式才需要）
 var stateRaw = null;
 try { stateRaw = JSON.parse(localStorage.getItem('wh_scan_state')); } catch(e){}
 var startRow = (stateRaw && stateRaw.startRow != null) ? stateRaw.startRow : 0;
@@ -98,22 +66,8 @@ var ntc  = document.getElementById('notice');
 var scanned  = [];
 var locked   = false;
 var videoEl  = document.getElementById('video');
-var scannerControls = null; // 記錄 ZXing controls，方便停止
 
 function note(msg, cls) { ntc.textContent=msg; ntc.className=cls; ntc.style.display='block'; }
-
-// ── 停止相機 ──
-function stopCamera() {
-  try {
-    if (scannerControls) { scannerControls.stop(); scannerControls = null; }
-  } catch(e) {}
-  try {
-    if (videoEl.srcObject) {
-      videoEl.srcObject.getTracks().forEach(function(t){ t.stop(); });
-      videoEl.srcObject = null;
-    }
-  } catch(e) {}
-}
 
 // ── 載入 ZXing ──
 function loadZXing(cb) {
@@ -127,6 +81,7 @@ function loadZXing(cb) {
     document.head.appendChild(s);
   }
 
+  // 嘗試多個 CDN
   var cdns = [
     'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.4/umd/index.min.js',
     'https://unpkg.com/@zxing/browser@0.1.4/umd/index.min.js',
@@ -159,6 +114,7 @@ async function startScanner() {
   locked = false;
 
   try {
+    // 先取得相機 stream
     var stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
@@ -166,7 +122,10 @@ async function startScanner() {
     videoEl.srcObject = stream;
     await videoEl.play();
 
+    // 用 ZXing 解碼 video 元素（不需要 canvas）
     var hints = new Map();
+
+    // 相容新舊版 ZXing API
     var reader;
     if (ZXing.BrowserMultiFormatReader) {
       reader = new ZXing.BrowserMultiFormatReader(hints);
@@ -178,10 +137,8 @@ async function startScanner() {
 
     st.textContent = '📷 對準 QR Code 即可自動辨識';
 
+    // 直接解碼已在播放的 video
     reader.decodeFromStream(stream, videoEl, function(result, err, controls) {
-      // 記錄 controls 以便停止
-      if (controls && !scannerControls) scannerControls = controls;
-
       if (result && !locked) {
         locked = true;
         var text = result.getText();
@@ -194,14 +151,23 @@ async function startScanner() {
 
         scanned.push(text);
 
-        // 更新 UI
+        // 更新計數
         sc.style.display = 'block';
         sc.textContent   = '已掃 ' + scanned.length + ' / ' + maxRows;
         stxt.textContent = '第 ' + (startRow + scanned.length) + ' 列：' + text;
         sov.style.display = 'flex';
         st.textContent = '✅ 第 ' + scanned.length + ' 筆完成';
 
-        // 即時同步到 localStorage
+        // 傳回結果：iframe 模式傳給 parent，popup 模式傳給 opener
+        try {
+          if (isIframeMode) {
+            window.parent.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, originUrl);
+          } else if (window.opener) {
+            window.opener.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, '*');
+          }
+        } catch(e) {}
+
+        // 同步寫到 localStorage（即時更新，不等完成）
         try {
           localStorage.setItem('wh_scan_results', JSON.stringify({
             startRow: startRow,
@@ -213,10 +179,11 @@ async function startScanner() {
         setTimeout(function() {
           sov.style.display = 'none';
           if (scanned.length >= maxRows) {
+            if (controls) controls.stop();
             finish();
           } else {
             st.textContent = '📷 繼續對準下一個 QR Code';
-            locked = false;
+            locked = false;  // 解鎖，繼續掃
           }
         }, 1500);
       }
@@ -233,12 +200,22 @@ async function startScanner() {
   }
 }
 
-// ── 完成掃描，存結果後直接跳回（同一分頁） ──
+// ── 完成掃描 ──
 function finish() {
   // 停止相機
-  stopCamera();
+  if (videoEl.srcObject) {
+    videoEl.srcObject.getTracks().forEach(function(t){ t.stop(); });
+  }
 
-  // 確保最終結果已存到 localStorage
+  // iframe 模式：用 postMessage 通知父頁面完成
+  if (isIframeMode) {
+    try {
+      window.parent.postMessage({ type: 'QR_SCAN_DONE', total: scanned.length }, originUrl);
+    } catch(e) {}
+    return; // iframe 模式不跳轉，等父頁面把 src 設為 about:blank
+  }
+
+  // 非 iframe 模式（舊版相容）：存 localStorage 再跳轉
   try {
     localStorage.setItem('wh_scan_results', JSON.stringify({
       startRow: startRow,
@@ -247,26 +224,15 @@ function finish() {
     }));
   } catch(e) {}
 
-  // ✅ 關鍵修正：
-  // 不用 window.open，直接用 location.replace 跳回原頁（同一分頁，不留歷史紀錄）
-  // 這樣手機上不會多開分頁
   if (returnUrl) {
-    // 顯示「返回中」遮罩，避免用戶看到空白
-    document.getElementById('returning-overlay').classList.add('show');
-    // 用 replace 跳回，不留 scanner 在 history（按返回不會回到掃描頁）
-    setTimeout(function() {
-      location.replace(returnUrl);
-    }, 300);
+    location.href = returnUrl;
+  } else if (window.opener) {
+    try { window.opener.postMessage({ type:'QR_SCAN_DONE', total:scanned.length }, '*'); } catch(e){}
+    window.close();
+  } else if (history.length > 1) {
+    history.back();
   } else {
-    // 沒有 returnUrl 時（理論上不應發生）→ 嘗試關閉或返回
-    if (window.opener) {
-      try { window.opener.postMessage({ type:'QR_SCAN_DONE', total:scanned.length }, '*'); } catch(e){}
-      window.close();
-    } else if (history.length > 1) {
-      history.back();
-    } else {
-      window.close();
-    }
+    window.close();
   }
 }
 
