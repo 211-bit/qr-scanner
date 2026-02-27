@@ -107,104 +107,250 @@ function loadZXing(cb) {
   next();
 }
 
-// ── 啟動相機 + ZXing ──
+// ── 偵測裝置 ──
+var isSamsung = /Samsung/i.test(navigator.userAgent) || /SamsungBrowser/i.test(navigator.userAgent);
+var isIOS     = /iP(hone|ad|od)/.test(navigator.userAgent);
+
+// ── 啟動相機 + ZXing（三星相容版）──
+var activeStream   = null;   // 記錄 stream 供 finish() 停止
+var scanIntervalId = null;   // canvas 輪詢計時器（三星備援）
+var zxingReader    = null;
+
 async function startScanner() {
   st.textContent = '⏳ 相機啟動中...';
   locked = false;
 
+  // 三星優先用寬鬆的 constraints，避免解析度不支援卡住
+  var constraints = isSamsung
+    ? { audio: false, video: { facingMode: 'environment' } }
+    : { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } };
+
   try {
-    // 先取得相機 stream
-    var stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    activeStream = await navigator.mediaDevices.getUserMedia(constraints);
+    videoEl.srcObject = activeStream;
+
+    // 三星 Samsung Internet 需要設定這些屬性才能 autoplay
+    videoEl.setAttribute('playsinline', true);
+    videoEl.setAttribute('muted', true);
+    videoEl.muted = true;
+
+    await videoEl.play().catch(function(playErr) {
+      // 部分三星版本 play() 會 reject，但其實已在播放，忽略即可
+      console.warn('play() warning:', playErr);
     });
-    videoEl.srcObject = stream;
-    await videoEl.play();
 
-    // 用 ZXing 解碼 video 元素（不需要 canvas）
+    // ZXing reader
     var hints = new Map();
-
-    // 相容新舊版 ZXing API
-    var reader;
     if (ZXing.BrowserMultiFormatReader) {
-      reader = new ZXing.BrowserMultiFormatReader(hints);
+      zxingReader = new ZXing.BrowserMultiFormatReader(hints);
     } else if (ZXing.BrowserQRCodeReader) {
-      reader = new ZXing.BrowserQRCodeReader(hints);
+      zxingReader = new ZXing.BrowserQRCodeReader(hints);
     } else {
       throw new Error('找不到 ZXing Reader');
     }
 
     st.textContent = '📷 對準 QR Code 即可自動辨識';
 
-    // 直接解碼已在播放的 video
-    reader.decodeFromStream(stream, videoEl, function(result, err, controls) {
-      if (result && !locked) {
-        locked = true;
-        var text = result.getText();
-
-        // 避免連掃同一碼
-        if (scanned.length && scanned[scanned.length-1] === text) {
-          locked = false;
-          return;
+    // ── 主解碼方式：decodeFromStream ──
+    var streamDecodeOk = false;
+    try {
+      zxingReader.decodeFromStream(activeStream, videoEl, function(result, err, controls) {
+        streamDecodeOk = true;
+        if (result && !locked) {
+          locked = true;
+          var text = result.getText();
+          if (scanned.length && scanned[scanned.length-1] === text) { locked = false; return; }
+          _onScanned(text, controls);
         }
+      });
+    } catch(streamErr) {
+      console.warn('decodeFromStream failed, fallback to canvas polling:', streamErr);
+    }
 
-        scanned.push(text);
-
-        // 更新計數
-        sc.style.display = 'block';
-        sc.textContent   = '已掃 ' + scanned.length + ' / ' + maxRows;
-        stxt.textContent = '第 ' + (startRow + scanned.length) + ' 列：' + text;
-        sov.style.display = 'flex';
-        st.textContent = '✅ 第 ' + scanned.length + ' 筆完成';
-
-        // 同步傳給 GAS（如果有 opener）
-        try {
-          if (window.opener) {
-            window.opener.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, '*');
-          }
-        } catch(e) {}
-
-        // 同步寫到 localStorage（即時更新，不等完成）
-        try {
-          localStorage.setItem('wh_scan_results', JSON.stringify({
-            startRow: startRow,
-            results:  scanned.slice(),
-            ts:       Date.now()
-          }));
-        } catch(e) {}
-
-        setTimeout(function() {
-          sov.style.display = 'none';
-          if (scanned.length >= maxRows) {
-            if (controls) controls.stop();
-            finish();
-          } else {
-            st.textContent = '📷 繼續對準下一個 QR Code';
-            locked = false;  // 解鎖，繼續掃
-          }
-        }, 1500);
+    // ── 備援：canvas 輪詢（三星 Samsung Internet 有時 decodeFromStream 無回調）──
+    setTimeout(function() {
+      if (!streamDecodeOk) {
+        console.log('Activating canvas polling fallback for Samsung');
+        _startCanvasPolling();
       }
-    });
+    }, 2000);
 
   } catch(e) {
-    var msgs = {
-      NotAllowedError:  '❌ 請允許相機權限後重新整理',
-      NotFoundError:    '❌ 找不到相機，請確認裝置有相機',
-      NotReadableError: '❌ 相機被其他 App 佔用，請關閉後再試'
-    };
-    note(msgs[e.name] || ('❌ ' + (e.message||e.name)), 'err');
-    st.textContent = '❌ 相機啟動失敗';
+    if (e.name === 'NotAllowedError') {
+      showCameraBlockedGuide();
+    } else {
+      var msgs = {
+        NotFoundError:    '❌ 找不到相機，請確認裝置有相機',
+        NotReadableError: '❌ 相機被其他 App 佔用，請關閉後再試'
+      };
+      note(msgs[e.name] || ('❌ ' + (e.message || e.name)), 'err');
+      st.textContent = '❌ 相機啟動失敗';
+    }
+  }
+}
+
+// ── Canvas 輪詢備援（每 300ms 抓一幀解碼，給三星用）──
+function _startCanvasPolling() {
+  if (scanIntervalId) return;
+  var canvas  = document.createElement('canvas');
+  var ctx     = canvas.getContext('2d');
+  var polling = new ZXing.BrowserMultiFormatReader
+    ? new ZXing.BrowserMultiFormatReader()
+    : new ZXing.BrowserQRCodeReader();
+
+  scanIntervalId = setInterval(function() {
+    if (locked || videoEl.readyState < 2) return;
+    try {
+      canvas.width  = videoEl.videoWidth  || 640;
+      canvas.height = videoEl.videoHeight || 480;
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      var luminance = new ZXing.RGBLuminanceSource
+        ? new ZXing.RGBLuminanceSource(imgData.data, canvas.width, canvas.height)
+        : null;
+
+      if (!luminance) {
+        // 用 decodeFromImageElement 備援
+        polling.decodeFromCanvas(canvas).then(function(result) {
+          if (result && !locked) {
+            locked = true;
+            var text = result.getText();
+            if (scanned.length && scanned[scanned.length-1] === text) { locked = false; return; }
+            _onScanned(text, null);
+          }
+        }).catch(function(){});
+      } else {
+        var bmp    = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminance));
+        var result = polling.decode(bmp);
+        if (result && !locked) {
+          locked = true;
+          var text = result.getText();
+          if (scanned.length && scanned[scanned.length-1] === text) { locked = false; return; }
+          _onScanned(text, null);
+        }
+      }
+    } catch(e) { /* NotFoundException 是正常的，忽略 */ }
+  }, 300);
+}
+
+// ── 掃描成功共用處理 ──
+function _onScanned(text, controls) {
+  scanned.push(text);
+  sc.style.display = 'block';
+  sc.textContent   = '已掃 ' + scanned.length + ' / ' + maxRows;
+  stxt.textContent = '第 ' + (startRow + scanned.length) + ' 列：' + text;
+  sov.style.display = 'flex';
+  st.textContent   = '✅ 第 ' + scanned.length + ' 筆完成';
+
+  try {
+    if (window.opener) {
+      window.opener.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, '*');
+    }
+  } catch(e) {}
+
+  try {
+    localStorage.setItem('wh_scan_results', JSON.stringify({
+      startRow: startRow, results: scanned.slice(), ts: Date.now()
+    }));
+  } catch(e) {}
+
+  setTimeout(function() {
+    sov.style.display = 'none';
+    if (scanned.length >= maxRows) {
+      if (controls) try { controls.stop(); } catch(e) {}
+      if (scanIntervalId) { clearInterval(scanIntervalId); scanIntervalId = null; }
+      finish();
+    } else {
+      st.textContent = '📷 繼續對準下一個 QR Code';
+      locked = false;
+    }
+  }, 1500);
+}
+
+// ── 相機被拒絕時顯示引導解鎖畫面 ──
+function showCameraBlockedGuide() {
+  st.textContent = '❌ 相機權限被封鎖';
+  var isSamsungBrowser = /SamsungBrowser/i.test(navigator.userAgent);
+  var steps = isIOS
+    ? ['① 關閉此頁面',
+       '② 開啟「設定」App',
+       '③ 找到「Safari」',
+       '④ 點「相機」→ 改為「允許」',
+       '⑤ 重新開啟掃描']
+    : isSamsungBrowser
+    ? ['① 點網址列右側 ⋮ 選單',
+       '② 選「設定」→「網站權限」',
+       '③ 找到「相機」→ 解除封鎖',
+       '④ 或：長按網址列 → 點「網站設定」→ 相機改允許',
+       '⑤ 重新整理頁面']
+    : ['① 點下方「重新請求」按鈕',
+       '　 若跳出確認框 → 選「允許」',
+       '② 若無跳出，點網址列左側 🔒',
+       '③ 找「相機」→ 改為「允許」',
+       '④ 重新整理頁面即可'];
+
+  videoEl.style.display = 'none';
+  document.getElementById('overlay').style.display = 'none';
+  document.getElementById('guide').style.display   = 'none';
+  document.getElementById('bottom').style.display  = 'none';
+
+  var guide = document.createElement('div');
+  guide.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#1e293b;padding:28px;z-index:999;';
+  guide.innerHTML = [
+    '<div style="font-size:64px;margin-bottom:16px;">📷</div>',
+    '<div style="font-size:20px;font-weight:800;color:white;margin-bottom:8px;text-align:center;">相機權限被封鎖</div>',
+    '<div style="font-size:13px;color:#94a3b8;margin-bottom:24px;text-align:center;line-height:1.6;">請依照以下步驟重新開啟相機權限：</div>',
+    '<div style="width:100%;max-width:320px;background:#0f172a;border-radius:16px;padding:20px;margin-bottom:24px;">',
+      steps.map(function(s){
+        return '<div style="font-size:13px;color:#e2e8f0;padding:7px 0;border-bottom:1px solid #1e293b;line-height:1.6;">' + s + '</div>';
+      }).join(''),
+    '</div>',
+    (!isIOS ? '<button id="retry-cam-btn" style="width:100%;max-width:320px;padding:15px;background:linear-gradient(135deg,#4361ee,#7209b7);color:white;border:none;border-radius:14px;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:12px;box-shadow:0 4px 12px rgba(67,97,238,0.4);">🔄 重新請求相機權限</button>' : ''),
+    '<button onclick="window.close()" style="width:100%;max-width:320px;padding:13px;background:#334155;color:#94a3b8;border:none;border-radius:14px;font-size:14px;font-weight:600;cursor:pointer;">關閉此頁</button>'
+  ].join('');
+
+  document.getElementById('vw').appendChild(guide);
+
+  var retryBtn = document.getElementById('retry-cam-btn');
+  if (retryBtn) {
+    retryBtn.addEventListener('click', function() {
+      retryBtn.textContent = '⏳ 請求中...';
+      retryBtn.disabled = true;
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(function(stream) {
+          stream.getTracks().forEach(function(t){ t.stop(); });
+          guide.remove();
+          videoEl.style.display = 'block';
+          document.getElementById('overlay').style.display = 'flex';
+          document.getElementById('guide').style.display   = 'block';
+          document.getElementById('bottom').style.display  = 'flex';
+          startScanner();
+        })
+        .catch(function() {
+          retryBtn.textContent = '❌ 仍被拒絕，請至設定手動開啟';
+          retryBtn.style.background = '#475569';
+          retryBtn.disabled = false;
+        });
+    });
   }
 }
 
 // ── 完成掃描 ──
 function finish() {
-  // 停止相機
-  if (videoEl.srcObject) {
-    videoEl.srcObject.getTracks().forEach(function(t){ t.stop(); });
-  }
+  // 停止相機（用 activeStream 確保三星也能正確停止）
+  try {
+    if (activeStream) {
+      activeStream.getTracks().forEach(function(t){ t.stop(); });
+      activeStream = null;
+    } else if (videoEl.srcObject) {
+      videoEl.srcObject.getTracks().forEach(function(t){ t.stop(); });
+    }
+  } catch(e) {}
 
-  // 存結果到 localStorage（原頁面輪詢讀取）
+  // 停止 canvas 輪詢
+  if (scanIntervalId) { clearInterval(scanIntervalId); scanIntervalId = null; }
+
+  // 確保最終結果已存到 localStorage
   try {
     localStorage.setItem('wh_scan_results', JSON.stringify({
       startRow: startRow,
@@ -213,23 +359,18 @@ function finish() {
     }));
   } catch(e) {}
 
-  // 通知 opener（postMessage 傳回結果，最快速）
+  // 通知 opener
   try {
     if (window.opener) {
       window.opener.postMessage({
-        type:     'QR_SCAN_DONE',
-        results:  scanned.slice(),
-        startRow: startRow,
-        total:    scanned.length
+        type: 'QR_SCAN_DONE', results: scanned.slice(), startRow: startRow, total: scanned.length
       }, '*');
     }
   } catch(e) {}
 
-  // ✅ 關鍵：直接關閉這個分頁，不跳轉
-  // 用 setTimeout 讓 postMessage / localStorage 先寫完
+  // ✅ 直接關閉此分頁，不跳轉
   setTimeout(function() {
     window.close();
-    // 如果 window.close() 被瀏覽器擋（非 opener 開的視窗），顯示提示
     setTimeout(function() {
       if (!window.closed) {
         document.getElementById('cbtn').textContent = '✅ 掃描完成，請手動關閉此頁';
