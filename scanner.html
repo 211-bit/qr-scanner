@@ -30,6 +30,10 @@ body { background:#000; display:flex; flex-direction:column; height:100dvh; over
 #cbtn { flex:1; max-width:220px; padding:15px; background:linear-gradient(135deg,#059669,#10b981); color:white; border:none; border-radius:30px; font-size:16px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(5,150,105,0.4); }
 #notice { display:none; position:absolute; top:70px; left:12px; right:12px; padding:14px 16px; border-radius:12px; font-size:13px; line-height:1.6; text-align:center; z-index:60; color:white; }
 .err{background:rgba(239,68,68,0.95)} .warn{background:rgba(234,179,8,0.95);color:#1c1917}
+/* 新增開始按鈕樣式 */
+#startBtnContainer { position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; z-index:100; background:rgba(0,0,0,0.6); }
+#startBtn { padding:18px 36px; background:linear-gradient(135deg,#4361ee,#7209b7); color:white; border:none; border-radius:40px; font-size:20px; font-weight:800; cursor:pointer; box-shadow:0 8px 20px rgba(67,97,238,0.5); }
+#startBtn:active { transform:scale(0.96); }
 </style>
 </head>
 <body>
@@ -40,6 +44,10 @@ body { background:#000; display:flex; flex-direction:column; height:100dvh; over
   <div id="guide">將 QR Code 對準框內即可自動辨識</div>
   <div id="sov"><div id="sbox"><div id="sicon">✅</div><div id="stitle">掃描成功！</div><div id="stext"></div></div></div>
   <div id="notice"></div>
+  <!-- 開始按鈕（預設顯示） -->
+  <div id="startBtnContainer">
+    <button id="startBtn">📷 開始掃描</button>
+  </div>
 </div>
 <div id="bottom"><button id="cbtn" onclick="finish()">✓ 完成掃描</button></div>
 
@@ -48,7 +56,7 @@ body { background:#000; display:flex; flex-direction:column; height:100dvh; over
 var params    = new URLSearchParams(location.search);
 var maxRows   = parseInt(params.get('max') || '10');
 var returnUrl = params.get('returnUrl') || '';
-var originUrl = params.get('origin') || '*';  // 相容舊版 postMessage
+var originUrl = params.get('origin') || '*';
 
 // 從 localStorage 讀起始列
 var stateRaw = null;
@@ -61,21 +69,32 @@ var sc   = document.getElementById('sc');
 var sov  = document.getElementById('sov');
 var stxt = document.getElementById('stext');
 var ntc  = document.getElementById('notice');
+var videoEl  = document.getElementById('video');
+var startBtnContainer = document.getElementById('startBtnContainer');
+var startBtn = document.getElementById('startBtn');
 
 var scanned  = [];
 var locked   = false;
-var videoEl  = document.getElementById('video');
+var zxingLoaded = false;
 
 function note(msg, cls) { ntc.textContent=msg; ntc.className=cls; ntc.style.display='block'; }
 
-// ── 載入 ZXing ──
-function loadZXing(cb) {
+// ── 載入 ZXing（動態載入） ──
+function loadZXing(callback) {
+  if (zxingLoaded) { callback(); return; }
   st.textContent = '⏳ 載入掃描函式庫...';
 
   function tryLoad(src, ok, fail) {
     var s = document.createElement('script');
     s.src = src;
-    s.onload = function() { typeof ZXing !== 'undefined' ? ok() : fail(); };
+    s.onload = function() { 
+      if (typeof ZXing !== 'undefined') {
+        zxingLoaded = true;
+        ok(); 
+      } else {
+        fail();
+      }
+    };
     s.onerror = fail;
     document.head.appendChild(s);
   }
@@ -98,7 +117,7 @@ function loadZXing(cb) {
     var src = cdns[idx++];
     tryLoad(src, function() {
       ntc.style.display = 'none';
-      cb();
+      callback();
     }, function() {
       note('CDN ' + idx + ' 失敗，嘗試下一個...', 'warn');
       next();
@@ -121,7 +140,7 @@ async function startScanner() {
     videoEl.srcObject = stream;
     await videoEl.play();
 
-    // 用 ZXing 解碼 video 元素（不需要 canvas）
+    // 用 ZXing 解碼 video 元素
     var hints = new Map();
 
     // 相容新舊版 ZXing API
@@ -157,14 +176,14 @@ async function startScanner() {
         sov.style.display = 'flex';
         st.textContent = '✅ 第 ' + scanned.length + ' 筆完成';
 
-        // 同步傳給 GAS（如果有 opener）
+        // 同步傳給 opener（如果有）
         try {
           if (window.opener) {
             window.opener.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, '*');
           }
         } catch(e) {}
 
-        // 同步寫到 localStorage（即時更新，不等完成）
+        // 同步寫到 localStorage（即時更新）
         try {
           localStorage.setItem('wh_scan_results', JSON.stringify({
             startRow: startRow,
@@ -180,7 +199,7 @@ async function startScanner() {
             finish();
           } else {
             st.textContent = '📷 繼續對準下一個 QR Code';
-            locked = false;  // 解鎖，繼續掃
+            locked = false;
           }
         }, 1500);
       }
@@ -197,6 +216,14 @@ async function startScanner() {
   }
 }
 
+// ── 開始按鈕點擊事件 ──
+startBtn.addEventListener('click', function() {
+  // 隱藏開始按鈕
+  startBtnContainer.style.display = 'none';
+  // 載入 ZXing，完成後啟動掃描
+  loadZXing(startScanner);
+});
+
 // ── 完成掃描 ──
 function finish() {
   // 停止相機
@@ -204,7 +231,7 @@ function finish() {
     videoEl.srcObject.getTracks().forEach(function(t){ t.stop(); });
   }
 
-  // 存結果到 localStorage（原頁面輪詢讀取）
+  // 存結果到 localStorage
   try {
     localStorage.setItem('wh_scan_results', JSON.stringify({
       startRow: startRow,
@@ -213,7 +240,7 @@ function finish() {
     }));
   } catch(e) {}
 
-  // 通知 opener（postMessage 傳回結果，最快速）
+  // 通知 opener（若有）
   try {
     if (window.opener) {
       window.opener.postMessage({
@@ -225,11 +252,15 @@ function finish() {
     }
   } catch(e) {}
 
-  // ✅ 關鍵：直接關閉這個分頁，不跳轉
-  // 用 setTimeout 讓 postMessage / localStorage 先寫完
+  // 如果有 returnUrl，直接跳轉回去；否則嘗試關閉視窗
+  if (returnUrl && returnUrl !== '') {
+    window.location.href = returnUrl;
+    return;
+  }
+
+  // 無 returnUrl 時，視為彈窗模式，嘗試關閉
   setTimeout(function() {
     window.close();
-    // 如果 window.close() 被瀏覽器擋（非 opener 開的視窗），顯示提示
     setTimeout(function() {
       if (!window.closed) {
         document.getElementById('cbtn').textContent = '✅ 掃描完成，請手動關閉此頁';
@@ -240,8 +271,8 @@ function finish() {
   }, 150);
 }
 
-// ── 入口 ──
-loadZXing(startScanner);
+// 初始化時顯示「開始掃描」按鈕，但不載入 ZXing 或請求相機
+st.textContent = '✅ 準備就緒';
 </script>
 </body>
 </html>
