@@ -155,55 +155,119 @@ async function startScanner() {
 
     st.textContent = '📷 對準 QR Code 即可自動辨識';
 
-    // 直接解碼已在播放的 video
-    reader.decodeFromStream(stream, videoEl, function(result, err, controls) {
-      if (result && !locked) {
-        locked = true;
-        var text = result.getText();
+    // 用 canvas 裁切框框區域，只掃框框內的像素
+    var canvas = document.createElement('canvas');
+    var ctx    = canvas.getContext('2d');
+    var frameEl = document.getElementById('frame');
+    var rafId   = null;
 
-        // 避免連掃同一碼
-        if (scanned.length && scanned[scanned.length-1] === text) {
-          locked = false;
-          return;
-        }
-
-        scanned.push(text);
-
-        // 更新計數
-        sc.style.display = 'block';
-        sc.textContent   = '已掃 ' + scanned.length + ' / ' + maxRows;
-        stxt.textContent = '第 ' + (startRow + scanned.length) + ' 列：' + text;
-        sov.style.display = 'flex';
-        st.textContent = '✅ 第 ' + scanned.length + ' 筆完成';
-
-        // 同步傳給 opener（如果有）
-        try {
-          if (window.opener) {
-            window.opener.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, '*');
-          }
-        } catch(e) {}
-
-        // 同步寫到 localStorage（即時更新）
-        try {
-          localStorage.setItem('wh_scan_results', JSON.stringify({
-            startRow: startRow,
-            results:  scanned.slice(),
-            ts:       Date.now()
-          }));
-        } catch(e) {}
-
-        setTimeout(function() {
-          sov.style.display = 'none';
-          if (scanned.length >= maxRows) {
-            if (controls) controls.stop();
-            finish();
-          } else {
-            st.textContent = '📷 繼續對準下一個 QR Code';
-            locked = false;
-          }
-        }, 1500);
+    function cropAndDecode() {
+      if (locked) { rafId = requestAnimationFrame(cropAndDecode); return; }
+      if (videoEl.readyState < videoEl.HAVE_ENOUGH_DATA) {
+        rafId = requestAnimationFrame(cropAndDecode);
+        return;
       }
-    });
+
+      // 取得 video 實際顯示尺寸與原始尺寸
+      var vRect  = videoEl.getBoundingClientRect();
+      var vW     = videoEl.videoWidth;
+      var vH     = videoEl.videoHeight;
+
+      // video 是 object-fit:cover，計算縮放比例
+      var scaleX = vW / vRect.width;
+      var scaleY = vH / vRect.height;
+      var scale  = Math.max(scaleX, scaleY); // cover 取最大值
+
+      // 框框在畫面上的位置（相對於 video 元素）
+      var fRect  = frameEl.getBoundingClientRect();
+      var offsetX = fRect.left - vRect.left;
+      var offsetY = fRect.top  - vRect.top;
+
+      // 換算成 video 原始像素座標
+      var cropX = Math.max(0, offsetX * scale);
+      var cropY = Math.max(0, offsetY * scale);
+      var cropW = fRect.width  * scale;
+      var cropH = fRect.height * scale;
+
+      canvas.width  = cropW;
+      canvas.height = cropH;
+      ctx.drawImage(videoEl, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+      // 把裁切後的 canvas 送給 ZXing 解碼
+      var imageData = ctx.getImageData(0, 0, cropW, cropH);
+      try {
+        var luminance = new ZXing.ZXingLuminanceSource
+          ? new ZXing.ZXingLuminanceSource(canvas)
+          : null;
+
+        // 使用 decodeFromCanvas（若支援）或 decodeFromImageData
+        if (reader.decodeFromCanvas) {
+          reader.decodeFromCanvas(canvas).then(function(result) {
+            if (result && !locked) onScanResult(result.getText());
+          }).catch(function() {}).finally(function() {
+            rafId = requestAnimationFrame(cropAndDecode);
+          });
+        } else {
+          // fallback：轉成 dataURL 再解
+          reader.decodeFromImageUrl(canvas.toDataURL()).then(function(result) {
+            if (result && !locked) onScanResult(result.getText());
+          }).catch(function() {
+            rafId = requestAnimationFrame(cropAndDecode);
+          });
+        }
+      } catch(e) {
+        rafId = requestAnimationFrame(cropAndDecode);
+      }
+    }
+
+    function onScanResult(text) {
+      // 避免連掃同一碼
+      if (scanned.length && scanned[scanned.length-1] === text) {
+        locked = false;
+        rafId = requestAnimationFrame(cropAndDecode);
+        return;
+      }
+
+      scanned.push(text);
+
+      // 更新計數
+      sc.style.display = 'block';
+      sc.textContent   = '已掃 ' + scanned.length + ' / ' + maxRows;
+      stxt.textContent = '第 ' + (startRow + scanned.length) + ' 列：' + text;
+      sov.style.display = 'flex';
+      st.textContent = '✅ 第 ' + scanned.length + ' 筆完成';
+
+      // 同步傳給 opener（如果有）
+      try {
+        if (window.opener) {
+          window.opener.postMessage({ type:'QR_SCAN_RESULT', text:text, index:scanned.length-1 }, '*');
+        }
+      } catch(e) {}
+
+      // 同步寫到 localStorage（即時更新）
+      try {
+        localStorage.setItem('wh_scan_results', JSON.stringify({
+          startRow: startRow,
+          results:  scanned.slice(),
+          ts:       Date.now()
+        }));
+      } catch(e) {}
+
+      setTimeout(function() {
+        sov.style.display = 'none';
+        if (scanned.length >= maxRows) {
+          if (rafId) cancelAnimationFrame(rafId);
+          finish();
+        } else {
+          st.textContent = '📷 繼續對準下一個 QR Code';
+          locked = false;
+          rafId = requestAnimationFrame(cropAndDecode);
+        }
+      }, 1500);
+    }
+
+    // 啟動裁切解碼迴圈
+    cropAndDecode();
 
   } catch(e) {
     var msgs = {
